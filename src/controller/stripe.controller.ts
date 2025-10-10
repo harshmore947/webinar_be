@@ -11,7 +11,7 @@ const stripe = new Stripe(
   process.env.STRIPE_SECRET_KEY ||
     "sk_test_51RqUu70T2JSa61UCxM9f0C58HHsMG546Bcn624CCT7bKikzUWVGpNDPfuM98ign4Fi69SMEsEY0yhWOJS4xfncyi00dcC5SBaX",
   {
-    apiVersion: "2025-08-27.basil",
+    apiVersion: "2025-06-30.basil",
   }
 );
 
