@@ -317,7 +317,7 @@ const AnalyticsEventSchema = new Schema<IAnalyticsEvent>(
 );
 
 // Indexes for better performance
-WebinarAnalyticsSchema.index({ webinarId: 1 });
+// Note: webinarId already has unique index from schema field definition
 WebinarAnalyticsSchema.index({ lastUpdated: 1 });
 WebinarAnalyticsSchema.index({ "dailyMetrics.date": 1 });
 

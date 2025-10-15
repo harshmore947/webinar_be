@@ -100,7 +100,38 @@ export const generateCertificate = async (
     }
 
     // Render dynamic fields
-    if (config?.fields && config.fields.length > 0) {
+    // Use certificateTemplate.fields if available (new format with normalized coordinates)
+    // Otherwise fall back to certificateConfig.fields (legacy format)
+    let fieldsToRender: any[] = [];
+    
+    if (webinar.certificateTemplate && (webinar.certificateTemplate as any).fields) {
+      // New format: fields from certificateTemplate with normalized coordinates (0-1)
+      const templateFields = (webinar.certificateTemplate as any).fields;
+      const templateWidth = (webinar.certificateTemplate as any).width || dimensions.width;
+      const templateHeight = (webinar.certificateTemplate as any).height || dimensions.height;
+      
+      // Convert normalized coordinates to pixel positions
+      fieldsToRender = templateFields.map((field: any) => ({
+        ...field,
+        position: {
+          x: field.x * templateWidth,  // Convert 0-1 to pixels (0.5 * 800 = 400px)
+          y: field.y * templateHeight  // Convert 0-1 to pixels (0.35 * 600 = 210px)
+        }
+      }));
+      
+      console.log("🎨 Rendering certificate fields (normalized to pixels):", {
+        templateDimensions: { width: templateWidth, height: templateHeight },
+        fieldsCount: fieldsToRender.length,
+        sampleField: fieldsToRender[0] ? {
+          key: fieldsToRender[0].key,
+          normalized: { x: templateFields[0].x, y: templateFields[0].y },
+          pixels: fieldsToRender[0].position
+        } : null
+      });
+      
+      await renderDynamicFields(ctx, fieldsToRender, certificateData);
+    } else if (config?.fields && config.fields.length > 0) {
+      // Legacy format: fields from certificateConfig with pixel positions
       await renderDynamicFields(ctx, config.fields, certificateData);
     } else {
       // Fallback to legacy positioning
@@ -159,33 +190,25 @@ const renderDynamicFields = async (
   for (const field of fields) {
     let value = "";
 
-    // Get field value based on field ID/label
-    switch (field.id.toLowerCase()) {
-      case "attendee_name":
-      case "participant_name":
-      case "name":
-        value = data.attendeeName;
-        break;
-      case "webinar_title":
-      case "course_title":
-      case "title":
-        value = data.webinarTitle;
-        break;
-      case "completion_date":
-      case "date":
-        value = formatDate(data.completionDate, field.format);
-        break;
-      case "certificate_number":
-      case "number":
-        value = data.certificateNumber;
-        break;
-      default:
-        // Check custom fields
-        value =
-          data.customFields?.[field.id] ||
-          data.customFields?.[field.label] ||
-          field.label;
-        break;
+    // Get field value based on field key or ID (supporting both formats)
+    const fieldKey = (field as any).key || field.id;
+    const fieldId = fieldKey.toLowerCase().replace(/[_\s]/g, '');  // Normalize: attendeeName, attendee_name, attendee name → attendeename
+
+    // Get field value based on normalized field ID
+    if (fieldId.includes('attendee') || fieldId.includes('participant') || fieldId.includes('name')) {
+      value = data.attendeeName;
+    } else if (fieldId.includes('webinar') || fieldId.includes('course') || fieldId.includes('title')) {
+      value = data.webinarTitle;
+    } else if (fieldId.includes('completion') || fieldId.includes('date')) {
+      value = formatDate(data.completionDate, field.format);
+    } else if (fieldId.includes('certificate') || fieldId.includes('number')) {
+      value = data.certificateNumber;
+    } else {
+      // Check custom fields
+      value =
+        data.customFields?.[fieldKey] ||
+        data.customFields?.[field.label] ||
+        field.label;
     }
 
     // Apply text styling
@@ -196,19 +219,21 @@ const renderDynamicFields = async (
           ? "300"
           : "normal";
     ctx.font = `${fontWeight} ${field.fontSize}px Arial, sans-serif`;
-    ctx.fillStyle = field.fontColor;
+    // Support both 'color' (schema) and 'fontColor' (legacy) properties
+    ctx.fillStyle = (field as any).color || field.fontColor || '#000000';
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
 
     // Save context for rotation
     ctx.save();
 
-    // Apply rotation if specified
-    if (field.rotation !== 0) {
+    // Apply rotation if specified (default to 0 if not specified)
+    const rotation = field.rotation || 0;
+    if (rotation !== 0) {
       const centerX = field.position.x + (field.width || 0) / 2;
       const centerY = field.position.y + field.fontSize / 2;
       ctx.translate(centerX, centerY);
-      ctx.rotate((field.rotation * Math.PI) / 180);
+      ctx.rotate((rotation * Math.PI) / 180);
       ctx.translate(-centerX, -centerY);
     }
 

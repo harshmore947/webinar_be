@@ -171,10 +171,10 @@ export const generateEnhancedCertificate = async (
     if (config?.fields && config.fields.length > 0) {
       // Map fields to ensure all required properties exist and filter supported types
       const enhancedFields: EnhancedCertificateField[] = config.fields
-        .filter((field) =>
+        .filter((field: any) =>
           ["text", "date", "number", "email"].includes(field.type)
         )
-        .map((field) => ({
+        .map((field: any) => ({
           ...field,
           type: field.type as "text" | "date" | "number" | "email",
           fontFamily: (field as any).fontFamily || "Arial",

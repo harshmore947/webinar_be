@@ -1,6 +1,62 @@
 import mongoose, { Document, Schema } from "mongoose";
 import { IUser } from "./User.model";
 
+export interface IWebinarCertificateField {
+  id: string;
+  key: string;
+  label: string;
+  x: number;
+  y: number;
+  fontFamily: string;
+  fontSize: number;
+  align: "left" | "center" | "right";
+  color: string;
+  defaultText?: string;
+  format?: string;
+}
+
+export interface IWebinarCertificateTemplate {
+  cloudinaryTemplateId: string;
+  cloudinaryUrl?: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  fields: IWebinarCertificateField[];
+  lastEdited?: Date;
+  version: number;
+}
+
+export interface IWebinarEnrolledUserCert {
+  status: "pending" | "in_progress" | "done" | "failed";
+  cloudinaryPublicId?: string;
+  cloudinaryUrl?: string;
+  attempts: number;
+  lastError?: string;
+  generatedAt?: Date;
+  certificateNumber?: string;
+}
+
+export interface IWebinarEnrolledUser {
+  userId: IUser["_id"];
+  name: string;
+  email: string;
+  cert: IWebinarEnrolledUserCert;
+}
+
+export interface IWebinarCertificateGenerationSummary {
+  total: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface IWebinarCertificateGeneration {
+  lock: boolean;
+  lastRunAt?: Date;
+  lastSummary?: IWebinarCertificateGenerationSummary;
+  lastRunId?: string;
+  lastStatus?: "started" | "finished" | "failed";
+}
+
 export interface IWebinar extends Document {
   hostId: mongoose.Types.ObjectId; //ref user
   title: string;
@@ -35,7 +91,7 @@ export interface IWebinar extends Document {
   endedAt?: Date; // Timestamp when webinar was ended
   createdAt: Date;
   updatedAt: Date;
-  enrolledUsers: Array<IUser["_id"]>;
+  enrolledUsers: IWebinarEnrolledUser[];
   // Thumbnail
   thumbnailUrl?: string;
   thumbnailPublicId?: string;
@@ -49,33 +105,10 @@ export interface IWebinar extends Document {
   allowReplayAccess?: boolean; // Allow replay-only enrollment
   replayPrice?: number; // Optional separate price for replay
   hasCertification: boolean;
-  certificateTemplate?: string; // Cloudinary URL or path to certificate template
-  certificateConfig?: {
-    fields?: Array<{
-      id: string;
-      label: string;
-      type: "text" | "date" | "number" | "email" | "select";
-      placeholder?: string;
-      required: boolean;
-      position: { x: number; y: number };
-      fontSize: number;
-      fontColor: string;
-      fontWeight: "normal" | "bold" | "light";
-      rotation: number;
-      width?: number;
-      height?: number;
-      options?: string[];
-      defaultValue?: string;
-      format?: string;
-    }>;
-    backgroundImage?: string; // Cloudinary URL
-    dimensions?: { width: number; height: number };
-    // Legacy fields for backward compatibility
-    namePosition?: { x: number; y: number };
-    numberPosition?: { x: number; y: number };
-    fontSize?: number;
-    fontColor?: string;
-  };
+  certificateTemplate?: IWebinarCertificateTemplate;
+  certificateGeneration?: IWebinarCertificateGeneration;
+  customFields?: Record<string, any>;
+  certificateConfig?: any; // legacy compatibility
   attendedUsers: Array<{
     userId: IUser["_id"];
     joinTime: Date;
@@ -95,6 +128,103 @@ export interface IWebinar extends Document {
   averageRating?: number;
   reviewCount?: number;
 }
+
+const CertificateFieldSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    key: { type: String, required: true },
+    label: { type: String, default: "" },
+    x: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 1,
+    },
+    y: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 1,
+    },
+    fontFamily: { type: String, default: "Arial" },
+    fontSize: { type: Number, default: 16 },
+    align: {
+      type: String,
+      enum: ["left", "center", "right"],
+      default: "left",
+    },
+    color: { type: String, default: "#000000" },
+    defaultText: { type: String },
+    format: { type: String },
+  },
+  { _id: false }
+);
+
+const CertificateTemplateSchema = new Schema(
+  {
+    cloudinaryTemplateId: { type: String, required: true },
+    cloudinaryUrl: { type: String },
+    mimeType: { type: String, required: true },
+  width: { type: Number, required: true },
+  height: { type: Number, required: true },
+    fields: { type: [CertificateFieldSchema], default: [] },
+    lastEdited: { type: Date, default: Date.now },
+    version: { type: Number, default: 1 },
+  },
+  { _id: false }
+);
+
+const CertificateStatusSchema = new Schema(
+  {
+    status: {
+      type: String,
+      enum: ["pending", "in_progress", "done", "failed"],
+      default: "pending",
+    },
+    cloudinaryPublicId: { type: String },
+    cloudinaryUrl: { type: String },
+    attempts: { type: Number, default: 0 },
+    lastError: { type: String },
+    generatedAt: { type: Date },
+  certificateNumber: { type: String },
+  },
+  { _id: false }
+);
+
+const EnrolledUserSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    name: { type: String, default: "" },
+    email: { type: String, default: "" },
+    cert: {
+      type: CertificateStatusSchema,
+      default: () => ({ status: "pending", attempts: 0 }),
+    },
+  },
+  { _id: false }
+);
+
+EnrolledUserSchema.method("toString", function toString() {
+  return this.userId ? this.userId.toString() : "";
+});
+
+const CertificateGenerationSchema = new Schema(
+  {
+    lock: { type: Boolean, default: false },
+    lastRunAt: { type: Date },
+    lastSummary: {
+      total: { type: Number, default: 0 },
+      succeeded: { type: Number, default: 0 },
+      failed: { type: Number, default: 0 },
+    },
+    lastRunId: { type: String },
+    lastStatus: {
+      type: String,
+      enum: ["started", "finished", "failed"],
+    },
+  },
+  { _id: false }
+);
 
 // const AgendaSchema = new Schema<IAgendaItem>({
 //   title: { type: String, required: true },
@@ -226,60 +356,24 @@ const WebinarSchema = new Schema<IWebinar>(
     viewCount: { type: Number, default: 0 },
     allowReplayAccess: { type: Boolean, default: false },
     replayPrice: { type: Number },
-    enrolledUsers: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
+    enrolledUsers: {
+      type: [EnrolledUserSchema],
+      default: [],
+    },
     hasCertification: { type: Boolean, default: false },
-    certificateTemplate: { type: String }, // Cloudinary URL
-    certificateConfig: {
-      fields: [
-        {
-          id: { type: String },
-          label: { type: String },
-          type: {
-            type: String,
-            enum: ["text", "date", "number", "email", "select"],
-          },
-          placeholder: { type: String },
-          required: { type: Boolean, default: false },
-          position: {
-            x: { type: Number },
-            y: { type: Number },
-          },
-          fontSize: { type: Number, default: 16 },
-          fontColor: { type: String, default: "#000000" },
-          fontWeight: {
-            type: String,
-            enum: ["normal", "bold", "light"],
-            default: "normal",
-          },
-          rotation: { type: Number, default: 0 },
-          width: { type: Number },
-          height: { type: Number },
-          options: [{ type: String }],
-          defaultValue: { type: String },
-          format: { type: String },
-        },
-      ],
-      backgroundImage: { type: String }, // Cloudinary URL
-      dimensions: {
-        width: { type: Number, default: 800 },
-        height: { type: Number, default: 600 },
-      },
-      // Legacy fields for backward compatibility
-      namePosition: {
-        x: { type: Number, default: 300 },
-        y: { type: Number, default: 200 },
-      },
-      numberPosition: {
-        x: { type: Number, default: 300 },
-        y: { type: Number, default: 250 },
-      },
-      fontSize: { type: Number, default: 20 },
-      fontColor: { type: String, default: "#000000" },
+    certificateTemplate: { type: CertificateTemplateSchema },
+    certificateGeneration: {
+      type: CertificateGenerationSchema,
+      default: () => ({
+        lock: false,
+        lastSummary: { total: 0, succeeded: 0, failed: 0 },
+        lastStatus: "finished",
+      }),
+    },
+    customFields: {
+      type: Map,
+      of: Schema.Types.Mixed,
+      default: {},
     },
     attendedUsers: [
       {
@@ -308,8 +402,50 @@ const WebinarSchema = new Schema<IWebinar>(
   { timestamps: true }
 );
 
+function normalizeEnrolledUsers(doc: any) {
+  if (!doc?.enrolledUsers) {
+    return;
+  }
+
+  const normalized = doc.enrolledUsers.map((entry: any) => {
+    if (!entry) {
+      return entry;
+    }
+
+    if (entry.userId) {
+      return {
+        userId: entry.userId,
+        name: entry.name || "",
+        email: entry.email || "",
+        cert: {
+          status: entry.cert?.status || "pending",
+          cloudinaryPublicId: entry.cert?.cloudinaryPublicId,
+          cloudinaryUrl: entry.cert?.cloudinaryUrl,
+          attempts: entry.cert?.attempts ?? 0,
+          lastError: entry.cert?.lastError,
+          generatedAt: entry.cert?.generatedAt,
+        },
+      };
+    }
+
+    return {
+      userId: entry,
+      name: "",
+      email: "",
+      cert: {
+        status: "pending",
+        attempts: 0,
+      },
+    };
+  });
+
+  doc.enrolledUsers = normalized;
+}
+
 // Add pre-save middleware to ensure date and time are always in the correct format
 WebinarSchema.pre("save", function (next) {
+  normalizeEnrolledUsers(this);
+
   // Format date if it exists but doesn't match YYYY-MM-DD format
   if (this.date && !/^\d{4}-\d{2}-\d{2}$/.test(this.date)) {
     try {
@@ -363,6 +499,10 @@ WebinarSchema.pre("save", function (next) {
   }
 
   next();
+});
+
+WebinarSchema.post("init", function () {
+  normalizeEnrolledUsers(this);
 });
 
 export default mongoose.model<IWebinar>("Webinar", WebinarSchema);

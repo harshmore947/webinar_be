@@ -10,6 +10,7 @@ import {
   uploadWebinarThumbnail as uploadThumbToCloudinary,
 } from "../utils/cloudinaryService";
 import { logError, logInfo } from "../utils/logger";
+import { getSocketInstance } from "../utils/socketService";
 
 /**
  * Upload resources for a webinar
@@ -105,6 +106,22 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
     logInfo(
       `${successfulUploads.length} resources uploaded for webinar ${webinarId}`
     );
+
+    // Emit socket event for real-time update
+    const io = getSocketInstance();
+    if (io) {
+      io.to(`webinar_${webinarId}`).emit("resource_uploaded", {
+        success: true,
+        webinarId,
+        resources: newResources,
+        uploadedBy: {
+          userId,
+          role: userRole,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      logInfo(`Socket event 'resource_uploaded' emitted for webinar ${webinarId}`);
+    }
 
     res.json({
       success: true,
@@ -204,6 +221,22 @@ export const deleteWebinarResource = async (req: Request, res: Response) => {
     await webinar.save();
 
     logInfo(`Resource deleted from webinar ${webinarId}: ${resource.name}`);
+
+    // Emit socket event for real-time update
+    const io = getSocketInstance();
+    if (io) {
+      io.to(`webinar_${webinarId}`).emit("resource_deleted", {
+        success: true,
+        webinarId,
+        resourceId,
+        deletedBy: {
+          userId,
+          role: userRole,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      logInfo(`Socket event 'resource_deleted' emitted for webinar ${webinarId}`);
+    }
 
     res.json({
       success: true,

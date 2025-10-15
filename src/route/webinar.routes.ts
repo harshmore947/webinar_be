@@ -206,8 +206,9 @@ router.post(
   requestUserCertificate
 );
 
+// Get user's certificate for this webinar
 router.get(
-  "/:id/certificates/:certificateNumber",
+  "/:id/certificate",
   authenticateJWT,
   getUserCertificate
 );

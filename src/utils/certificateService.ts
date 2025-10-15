@@ -506,7 +506,7 @@ export class CertificateService {
         webinarId,
         attendeeData,
         {
-          templateId: webinar.certificateTemplate, // Use certificateTemplate instead of certificateConfig.templateId
+          templateId: webinar.certificateTemplate?.cloudinaryTemplateId, // Use cloudinaryTemplateId from certificateTemplate
           priority: 5, // High priority for auto-generation
           batchSize: 15,
         }

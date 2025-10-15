@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import WebinarModel from "../models/Webinar.model";
+import UserModel from "../models/User.model";
 import { Types } from "mongoose";
 import { createNotification } from "./notification.controller";
 import { combineDateTime } from "../utils/dateTimeUtils";
@@ -14,6 +15,7 @@ import crypto from "crypto";
 import { initializeWebinarAnalytics } from "./analytics.controller";
 import { SimpleCertificateService } from "../utils/simpleCertificateService";
 import { addBatchCertificateJob } from "../utils/certificateQueue";
+import { createEnrollmentRecord, isUserEnrolled } from "../utils/enrollment";
 
 // Helper function to generate certificates after webinar ends
 const generateCertificatesAfterWebinarEnd = async (webinarId: string) => {
@@ -352,11 +354,66 @@ export const createWebinar = async (req: Request, res: Response) => {
       processedData.agenda = sanitizeHtml(processedData.agenda);
     }
 
+    // Transform certificateTemplate from string URL to proper object structure
+    if (processedData.certificateTemplate && typeof processedData.certificateTemplate === 'string') {
+      const templateUrl = processedData.certificateTemplate;
+      const cloudinaryId = templateUrl.split('/').pop()?.split('.')[0] || 'template';
+      
+      // Get template dimensions
+      const templateWidth = processedData.certificateConfig?.dimensions?.width || 800;
+      const templateHeight = processedData.certificateConfig?.dimensions?.height || 600;
+      
+      // Convert certificateConfig fields to certificateTemplate fields format
+      // IMPORTANT: Normalize x,y coordinates from absolute pixels to 0-1 range (percentages)
+      const fields = processedData.certificateConfig?.fieldMappings?.map((mapping: any) => {
+        // Convert absolute pixel positions to normalized 0-1 range
+        const normalizedX = (mapping.position?.x || 0) / 100; // x is already in percentage (0-100), so divide by 100
+        const normalizedY = (mapping.position?.y || 0) / 100; // y is already in percentage (0-100), so divide by 100
+        
+        return {
+          id: mapping.fieldKey,
+          key: mapping.fieldKey,
+          label: mapping.label || mapping.fieldKey,
+          x: normalizedX,  // Normalized to 0-1 range
+          y: normalizedY,  // Normalized to 0-1 range
+          fontSize: mapping.fontSize || 16,
+          align: 'left',
+          color: mapping.fontColor || '#000000',
+          fontWeight: mapping.fontWeight || 'normal',
+        };
+      }) || [];
+
+      processedData.certificateTemplate = {
+        cloudinaryTemplateId: cloudinaryId,
+        cloudinaryUrl: templateUrl,
+        mimeType: 'image/jpeg',
+        width: templateWidth,
+        height: templateHeight,
+        fields: fields,
+        lastEdited: new Date(),
+        version: 1,
+      };
+    }
+
+    // Get user details for enrolledUsers
+    const currentUser = await UserModel.findById(userId);
+    
+    // Prepare enrolledUsers as an array of objects (not just user IDs)
+    const enrolledUsers = [{
+      userId: userId,
+      name: currentUser ? `${currentUser.firstName} ${currentUser.lastName || ''}`.trim() : '',
+      email: currentUser?.email || '',
+      cert: {
+        status: 'pending',
+        attempts: 0,
+      },
+    }];
+
     // Any authenticated user can create a webinar and will be the host
     const newWebinar = new WebinarModel({
       ...processedData,
       hostId: userId,
-      enrolledUsers: [userId],
+      enrolledUsers: enrolledUsers,
     });
 
     await newWebinar.save();
@@ -395,6 +452,7 @@ export const createWebinar = async (req: Request, res: Response) => {
           ? (error as Error).message
           : undefined,
     });
+    console.log(error);
   }
 };
 
@@ -659,6 +717,54 @@ export const updateWebinar = async (req: Request, res: Response) => {
       delete processedData.resources;
     }
 
+    // EDGE CASE 9: Transform certificateTemplate from string URL to proper object structure
+    // This handles the case where frontend sends certificateTemplate as a URL string
+    if (processedData.certificateTemplate && typeof processedData.certificateTemplate === 'string') {
+      const templateUrl = processedData.certificateTemplate;
+      const cloudinaryId = templateUrl.split('/').pop()?.split('.')[0] || 'template';
+      
+      // Get template dimensions from certificateConfig or use defaults
+      const templateWidth = processedData.certificateConfig?.dimensions?.width || 800;
+      const templateHeight = processedData.certificateConfig?.dimensions?.height || 600;
+      
+      // Convert certificateConfig fields to certificateTemplate fields format
+      // IMPORTANT: Normalize x,y coordinates from percentage (0-100) to 0-1 range
+      const fields = processedData.certificateConfig?.fieldMappings?.map((mapping: any) => {
+        // Convert percentage positions (0-100) to normalized 0-1 range
+        const normalizedX = (mapping.position?.x || 0) / 100; // 50 → 0.5
+        const normalizedY = (mapping.position?.y || 0) / 100; // 75 → 0.75
+        
+        return {
+          id: mapping.fieldKey,
+          key: mapping.fieldKey,
+          label: mapping.label || mapping.fieldKey,
+          x: normalizedX,  // Normalized to 0-1 range for schema validation
+          y: normalizedY,  // Normalized to 0-1 range for schema validation
+          fontSize: mapping.fontSize || 16,
+          align: 'left',
+          color: mapping.fontColor || '#000000',
+          fontWeight: mapping.fontWeight || 'normal',
+        };
+      }) || [];
+
+      console.log("🔄 UPDATE - Transforming certificateTemplate from URL to object:", {
+        url: templateUrl,
+        fields: fields.length,
+        dimensions: { width: templateWidth, height: templateHeight },
+      });
+
+      processedData.certificateTemplate = {
+        cloudinaryTemplateId: cloudinaryId,
+        cloudinaryUrl: templateUrl,
+        mimeType: 'image/jpeg',
+        width: templateWidth,
+        height: templateHeight,
+        fields: fields,
+        lastEdited: new Date(),
+        version: (webinar.certificateTemplate as any)?.version ? (webinar.certificateTemplate as any).version + 1 : 1,
+      };
+    }
+
     // Update webinar fields
     Object.assign(webinar, processedData);
     await webinar.save();
@@ -684,6 +790,7 @@ export const updateWebinar = async (req: Request, res: Response) => {
           ? (error as Error).message
           : undefined,
     });
+    console.log(error);
   }
 };
 
@@ -1222,7 +1329,7 @@ export const endWebinar = async (req: Request, res: Response) => {
       });
     }
 
-    // Update webinar status to ended with timestamp
+    // Update webinar status to ended with timestamp - IMMEDIATE DATABASE UPDATE
     const endedAt = new Date();
     const updatedWebinar = await WebinarModel.findByIdAndUpdate(
       id,
@@ -1246,21 +1353,98 @@ export const endWebinar = async (req: Request, res: Response) => {
 
     console.log(`🏁 Webinar ${id} ended at ${endedAt.toISOString()}`);
 
+    // IMMEDIATE SOCKET BROADCAST - Send to all attendees BEFORE response
+    try {
+      const { getSocketInstance } = require("../utils/socketService");
+      const io = getSocketInstance();
+      if (io) {
+        // Broadcast to webinar room
+        io.to(`webinar_${id}`).emit("webinar_ended", {
+          webinarId: id,
+          title: updatedWebinar.title,
+          endedAt: endedAt,
+          status: "ended",
+          message: "This webinar has ended. Thank you for attending!",
+          hasCertification: updatedWebinar.hasCertification,
+        });
+
+        // Also broadcast to general webinar list updates
+        io.emit("webinar_status_updated", {
+          webinarId: id,
+          status: "ended",
+          endedAt: endedAt,
+        });
+
+        console.log(`✅ Webinar ended event broadcasted IMMEDIATELY for ${id}`);
+      }
+    } catch (socketError) {
+      console.error(
+        `❌ Failed to broadcast webinar ended event for ${id}:`,
+        socketError
+      );
+    }
+
     // Post-webinar processes (run asynchronously - don't block response)
     setImmediate(async () => {
       try {
-        // 1. Generate and send certificates IMMEDIATELY
-        if (updatedWebinar.hasCertification) {
-          console.log(`📜 Starting immediate certificate generation for webinar ${id}`);
+        // 1. Generate and send certificates using NEW service
+        if (updatedWebinar.hasCertification && updatedWebinar.certificateTemplate) {
+          console.log(`📜 Starting certificate generation for webinar ${id}`);
           try {
-            await generateCertificatesAfterWebinarEnd(id);
+            const { generateCertificatesForWebinar } = require("../services/certificateGeneration.service");
+            
+            // Start async certificate generation
+            const result = await generateCertificatesForWebinar(id, {
+              startAsync: true,
+              sendEmail: true,
+            });
+
             console.log(
-              `✅ Certificate generation and email sending completed for webinar ${id}`
+              `✅ Certificate generation initiated for webinar ${id}:`,
+              result
             );
+
+            // Notify host about certificate generation start
+            if (isHost || isAdmin) {
+              await createNotification(
+                userId,
+                `Certificate generation started for "${updatedWebinar.title}". Enrolled users will receive their certificates via email.`,
+                `/webinars/${id}`,
+                "info",
+                "Certificate Generation",
+                false
+              );
+            }
           } catch (certError) {
             console.error(
               `❌ Certificate generation failed for webinar ${id}:`,
               certError
+            );
+
+            // Notify host about failure
+            if (isHost || isAdmin) {
+              await createNotification(
+                userId,
+                `Certificate generation failed for "${updatedWebinar.title}". Please check the certificate configuration.`,
+                `/webinars/${id}`,
+                "error",
+                "Certificate Generation Error",
+                true
+              );
+            }
+          }
+        } else if (updatedWebinar.hasCertification && !updatedWebinar.certificateTemplate) {
+          console.log(`⚠️ Certificates enabled but no template configured for webinar ${id}`);
+          
+          // Notify host about missing template
+          if (isHost || isAdmin) {
+            await createNotification(
+              userId,
+              `Certificate generation skipped for "${updatedWebinar.title}". Please configure a certificate template.`,
+              `/webinars/${id}`,
+              "warning",
+              "Certificate Template Missing",
+              true
             );
           }
         } else {
@@ -1295,18 +1479,18 @@ export const endWebinar = async (req: Request, res: Response) => {
           );
         }
 
-        // 3. Send thank-you notifications to all attendees
+        // 3. Send thank-you notifications to all enrolled users
         try {
-          const attendeeIds = updatedWebinar.enrolledUsers.map((user: any) =>
-            user._id.toString()
+          const enrolledUserIds = updatedWebinar.enrolledUsers.map((user: any) =>
+            user._id ? user._id.toString() : user.toString()
           );
 
-          for (const attendeeId of attendeeIds) {
+          for (const attendeeId of enrolledUserIds) {
             await createNotification(
               attendeeId,
               `Thank you for attending "${updatedWebinar.title}"! ${
                 updatedWebinar.hasCertification
-                  ? "Your certificate will be sent shortly."
+                  ? "Your certificate will be sent to your email shortly."
                   : ""
               }`,
               `/webinars/${id}`,
@@ -1316,7 +1500,7 @@ export const endWebinar = async (req: Request, res: Response) => {
             );
           }
           console.log(
-            `✅ Thank-you notifications sent to ${attendeeIds.length} attendees`
+            `✅ Thank-you notifications sent to ${enrolledUserIds.length} attendees`
           );
         } catch (notificationError) {
           console.error(
@@ -1324,35 +1508,17 @@ export const endWebinar = async (req: Request, res: Response) => {
             notificationError
           );
         }
-
-        // 4. Emit socket event to all connected users
-        try {
-          const { getSocketInstance } = require("../utils/socketService");
-          const io = getSocketInstance();
-          if (io) {
-            io.to(`webinar_${id}`).emit("webinar_ended", {
-              webinarId: id,
-              title: updatedWebinar.title,
-              endedAt: endedAt,
-              message: "This webinar has ended. Thank you for attending!",
-            });
-            console.log(`✅ Webinar ended event broadcasted for ${id}`);
-          }
-        } catch (socketError) {
-          console.error(
-            `❌ Failed to broadcast webinar ended event for ${id}:`,
-            socketError
-          );
-        }
       } catch (error) {
         console.error(`❌ Post-webinar processing failed for ${id}:`, error);
       }
     });
 
+    // Send immediate response to client
     res.json({
       success: true,
       msg: "Webinar ended successfully",
       webinar: updatedWebinar,
+      endedAt: endedAt,
     });
   } catch (error) {
     console.error("Error ending webinar:", error);
@@ -1830,22 +1996,91 @@ export const requestUserCertificate = async (req: Request, res: Response) => {
       });
     }
 
-    // Use SimpleCertificateService to handle the certificate request
-    const result = await SimpleCertificateService.requestCertificateForUser(
-      userId,
-      webinarId
+    // Validate webinar and user enrollment
+    const webinar = await WebinarModel.findById(webinarId);
+    if (!webinar) {
+      return res.status(404).json({
+        success: false,
+        msg: "Webinar not found",
+      });
+    }
+
+    // Check if webinar has ended
+    if (webinar.status !== "ended") {
+      return res.status(400).json({
+        success: false,
+        msg: "Certificates can only be requested after the webinar has ended",
+      });
+    }
+
+    // Check if webinar has certification enabled
+    if (!webinar.hasCertification || !webinar.certificateTemplate) {
+      return res.status(400).json({
+        success: false,
+        msg: "Certification is not enabled for this webinar or template not configured",
+      });
+    }
+
+    // Check if user is enrolled
+    const isEnrolled = webinar.enrolledUsers.some(
+      (enrollment: any) => enrollment.userId?.toString() === userId || enrollment.toString() === userId
     );
 
-    if (result.success) {
+    if (!isEnrolled) {
+      return res.status(403).json({
+        success: false,
+        msg: "You must be enrolled in this webinar to request a certificate",
+      });
+    }
+
+    // Check if certificate already exists for this user
+    const existingEnrollment = webinar.enrolledUsers.find(
+      (enrollment: any) => enrollment.userId?.toString() === userId || enrollment.toString() === userId
+    );
+
+    if (existingEnrollment && typeof existingEnrollment === 'object' && existingEnrollment.cert) {
+      if (existingEnrollment.cert.status === "done") {
+        return res.status(200).json({
+          success: true,
+          msg: "Certificate already exists",
+          certificateNumber: existingEnrollment.cert.certificateNumber,
+          certificateUrl: existingEnrollment.cert.cloudinaryUrl,
+          status: "completed",
+        });
+      } else if (existingEnrollment.cert.status === "in_progress") {
+        return res.status(200).json({
+          success: true,
+          msg: "Certificate generation is in progress",
+          status: "generating",
+        });
+      }
+    }
+
+    // Use the proper certificateGeneration service to generate certificate for this specific user
+    const { generateCertificateForUser } = require("../services/certificateGeneration.service");
+    
+    const result = await generateCertificateForUser(webinarId, userId, {
+      startAsync: true,
+      sendEmail: true,
+    });
+
+    if (result.status === "started" || result.status === "completed") {
       return res.status(200).json({
         success: true,
-        msg: result.message || "Certificate request processed successfully",
-        jobId: result.jobId,
+        msg: "Certificate generation has been initiated. You will receive it via email shortly.",
+        runId: result.runId,
+        status: result.status === "completed" ? "completed" : "generating",
+      });
+    } else if (result.status === "already_running") {
+      return res.status(200).json({
+        success: true,
+        msg: "Certificate generation is already in progress",
+        status: "generating",
       });
     } else {
       return res.status(400).json({
         success: false,
-        msg: result.error || "Failed to process certificate request",
+        msg: result.message || "Failed to process certificate request",
       });
     }
   } catch (error) {
@@ -1853,6 +2088,7 @@ export const requestUserCertificate = async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       msg: "Internal server error",
+      error: (error as Error).message,
     });
   }
 };
@@ -1877,28 +2113,66 @@ export const getUserCertificate = async (req: Request, res: Response) => {
       });
     }
 
-    // Use SimpleCertificateService to get the certificate
-    const result = await SimpleCertificateService.getUserCertificateForWebinar(
-      userId,
-      webinarId
-    );
-
-    if (result.success) {
-      return res.status(200).json({
-        success: true,
-        certificate: result.certificate,
-      });
-    } else {
+    // Fetch webinar with user's certificate information
+    const webinar = await WebinarModel.findById(webinarId);
+    
+    if (!webinar) {
       return res.status(404).json({
         success: false,
-        msg: result.error || "Certificate not found",
+        msg: "Webinar not found",
       });
     }
+
+    // Find user's enrollment
+    const enrollment = webinar.enrolledUsers.find(
+      (e: any) => e.userId?.toString() === userId || e.toString() === userId
+    );
+
+    if (!enrollment || typeof enrollment === 'string') {
+      return res.status(404).json({
+        success: false,
+        msg: "You are not enrolled in this webinar",
+      });
+    }
+
+    // Check if certificate exists
+    if (!enrollment.cert || enrollment.cert.status === "pending") {
+      return res.status(404).json({
+        success: false,
+        msg: "Certificate not found. Please request generation first.",
+        hasCertificate: false,
+      });
+    }
+
+    // Return certificate information
+    const certificate = {
+      _id: webinarId,
+      certificateNumber: enrollment.cert.certificateNumber || "",
+      userId,
+      webinarId,
+      status: enrollment.cert.status === "done" ? "completed" : 
+              enrollment.cert.status === "in_progress" ? "generating" :
+              enrollment.cert.status === "failed" ? "failed" : "pending",
+      certificateUrl: enrollment.cert.cloudinaryUrl,
+      generatedAt: enrollment.cert.generatedAt?.toISOString() || new Date().toISOString(),
+      certificateData: {
+        attendeeName: enrollment.name || "",
+        webinarTitle: webinar.title,
+        completionDate: enrollment.cert.generatedAt?.toISOString() || webinar.endedAt?.toISOString() || new Date().toISOString(),
+      },
+    };
+
+    return res.status(200).json({
+      success: true,
+      hasCertificate: enrollment.cert.status === "done",
+      certificate,
+    });
   } catch (error) {
     console.error("Error getting certificate:", error);
     res.status(500).json({
       success: false,
       msg: "Internal server error",
+      error: (error as Error).message,
     });
   }
 };
@@ -2330,7 +2604,7 @@ export const createPaymentSession = async (req: Request, res: Response) => {
         product_name: webinar.title,
         customer_email: user.email,
         success_url: `${baseUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}&webinar_id=${id}`,
-        cancel_url: `${baseUrl}/payment/cancel?webinar_id=${id}`,
+        cancel_url: `${baseUrl}/webinars?payment_cancelled=true&webinar_id=${id}`,
         metadata: {
           webinar_id: id,
           user_id: userId,
@@ -2457,23 +2731,26 @@ export const verifyPayment = async (req: Request, res: Response) => {
         .json({ success: false, msg: "User ID not found in payment data" });
     }
 
+    userId = userId.toString();
+
     // Check if user is already enrolled
-    const isEnrolled = webinar.enrolledUsers.some(
-      (enrolledId) => enrolledId.toString() === userId
-    );
-    if (isEnrolled) {
+    if (isUserEnrolled(webinar, userId)) {
       return res
         .status(400)
         .json({ success: false, msg: "User is already enrolled" });
     }
 
-    // Enroll user in webinar
-    webinar.enrolledUsers.push(new Types.ObjectId(userId));
-    await webinar.save();
-
-    // Get user details for notification
+    // Get user details for enrollment and notification
     const UserModel = require("../models/User.model").default;
     const user = await UserModel.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ success: false, msg: "User not found" });
+    }
+
+    // Enroll user in webinar with normalized enrollment record
+    webinar.enrolledUsers.push(createEnrollmentRecord(user));
+    await webinar.save();
 
     // Send confirmation email
     if (user?.email) {

@@ -5,13 +5,17 @@ import UserModel from "../models/User.model";
 import PaymentModel from "../models/Payment.model";
 import { Types } from "mongoose";
 import { createNotification } from "./notification.controller";
+import {
+  createEnrollmentRecord,
+  isUserEnrolled,
+} from "../utils/enrollment";
 
 // Initialize Stripe with test mode
 const stripe = new Stripe(
   process.env.STRIPE_SECRET_KEY ||
     "sk_test_51RqUu70T2JSa61UCxM9f0C58HHsMG546Bcn624CCT7bKikzUWVGpNDPfuM98ign4Fi69SMEsEY0yhWOJS4xfncyi00dcC5SBaX",
   {
-    apiVersion: "2025-06-30.basil",
+    apiVersion: "2025-08-27.basil",
   }
 );
 
@@ -42,9 +46,7 @@ async function enrollUserInWebinar(
         };
       }
 
-      const isAlreadyEnrolled = webinar.enrolledUsers.some(
-        (enrolledUser) => enrolledUser.toString() === userId
-      );
+      const isAlreadyEnrolled = isUserEnrolled(webinar, userId);
 
       if (isAlreadyEnrolled) {
         console.log(`✅ User ${userId} is already enrolled in webinar ${webinarId}`);
@@ -64,10 +66,20 @@ async function enrollUserInWebinar(
       }
 
       // Enroll user
-      const updatedWebinar = await WebinarModel.findByIdAndUpdate(
-        webinarId,
+      const user = await UserModel.findById(userId);
+      if (!user) {
+        return {
+          success: false,
+          message: "User not found",
+        };
+      }
+
+      const enrollmentRecord = createEnrollmentRecord(user);
+
+      const updatedWebinar = await WebinarModel.findOneAndUpdate(
+        { _id: webinarId, "enrolledUsers.userId": { $ne: user._id } },
         {
-          $addToSet: { enrolledUsers: new Types.ObjectId(userId) },
+          $push: { enrolledUsers: enrollmentRecord },
         },
         { new: true }
       );
@@ -76,9 +88,6 @@ async function enrollUserInWebinar(
         throw new Error("Failed to update webinar with user enrollment");
       }
 
-      // Get user details for notification
-      const user = await UserModel.findById(userId);
-      
       // Create notification
       await createNotification(
         userId,
@@ -165,9 +174,7 @@ export const createPaymentSession = async (req: Request, res: Response) => {
     }
 
     // Check if user already enrolled
-    const isAlreadyEnrolled = webinar.enrolledUsers.some(
-      (enrolledUser) => enrolledUser.toString() === userId
-    );
+    const isAlreadyEnrolled = isUserEnrolled(webinar, userId);
     if (isAlreadyEnrolled) {
       return res.status(400).json({
         success: false,
@@ -192,7 +199,7 @@ export const createPaymentSession = async (req: Request, res: Response) => {
     // Determine redirect URLs based on webinar status
     // Include session_id in success URL for verification
     const successUrl = `${process.env.CLIENT_URL}/webinars/${webinarId}?payment_success=true&session_id={CHECKOUT_SESSION_ID}`;
-    const cancelUrl = `${process.env.CLIENT_URL}/webinars/${webinarId}?payment_cancelled=true`;
+    const cancelUrl = `${process.env.CLIENT_URL}/webinars?payment_cancelled=true&webinar_id=${webinarId}`;
 
     // Create Stripe checkout session with idempotency key
     const idempotencyKey = `payment_${userId}_${webinarId}_${Date.now()}`;
@@ -456,9 +463,7 @@ export const getPaymentStatus = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, msg: "Webinar not found" });
     }
 
-    const isEnrolled = webinar.enrolledUsers.some(
-      (enrolledUser) => enrolledUser.toString() === userId
-    );
+    const isEnrolled = isUserEnrolled(webinar, userId);
 
     res.json({
       success: true,
@@ -501,9 +506,7 @@ export const verifyPaymentAndEnroll = async (req: Request, res: Response) => {
     }
 
     // Check if user is already enrolled
-    const isEnrolled = webinar.enrolledUsers.some(
-      (enrolledUser) => enrolledUser.toString() === userId
-    );
+    const isEnrolled = isUserEnrolled(webinar, userId);
 
     if (isEnrolled) {
       console.log(`✅ User ${userId} is already enrolled`);

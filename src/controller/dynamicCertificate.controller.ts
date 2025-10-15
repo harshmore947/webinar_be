@@ -93,12 +93,23 @@ export const uploadTemplate = async (req: Request, res: Response) => {
       });
     }
 
-    // Update webinar with template URL
-    webinar.certificateTemplate = uploadResult.url;
+    // Update webinar with normalized template structure
+    webinar.certificateTemplate = {
+      cloudinaryTemplateId: uploadResult.publicId || `cert_template_${webinarId}`,
+      cloudinaryUrl: uploadResult.url,
+      mimeType: file.mimetype || "image/png",
+      width: 1200,
+      height: 800,
+      fields: [],
+      lastEdited: new Date(),
+      version: 1,
+    };
+
+    // Keep legacy certificateConfig for backward compatibility
     if (!webinar.certificateConfig) {
       webinar.certificateConfig = {
         backgroundImage: uploadResult.url,
-        dimensions: { width: 800, height: 600 },
+        dimensions: { width: 1200, height: 800 },
       };
     } else {
       webinar.certificateConfig.backgroundImage = uploadResult.url;
