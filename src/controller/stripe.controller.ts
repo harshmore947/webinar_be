@@ -14,11 +14,10 @@ import {
 const stripe = new Stripe(
   process.env.STRIPE_SECRET_KEY ||
     "sk_test_51RqUu70T2JSa61UCxM9f0C58HHsMG546Bcn624CCT7bKikzUWVGpNDPfuM98ign4Fi69SMEsEY0yhWOJS4xfncyi00dcC5SBaX",
-  {
-    // Cast to any because installed Stripe types may restrict apiVersion to a specific literal union.
-    // Using `as any` prevents TS2322 when the literal isn't present in the type union.
-    apiVersion: "2025-08-27.basil" ,
-  }
+  // Cast options to any to avoid literal-union mismatches between installed Stripe types and desired apiVersion
+  ({
+    apiVersion: "2025-08-27.basil",
+  } as any)
 );
 
 /**
