@@ -1351,7 +1351,15 @@ export const endWebinar = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`🏁 Webinar ${id} ended at ${endedAt.toISOString()}`);
+    // IMMEDIATE CACHE INVALIDATION - Clear cached webinar data
+    try {
+      const { clearCachePattern } = require("../middleware/cache.middleware");
+      // Clear cache for this specific webinar
+      clearCachePattern(`GET:/api/webinars/${id}:`);
+      console.log(`✅ Cache invalidated for webinar ${id}`);
+    } catch (cacheError) {
+      console.warn(`⚠️ Failed to invalidate cache for webinar ${id}:`, cacheError);
+    }
 
     // IMMEDIATE SOCKET BROADCAST - Send to all attendees BEFORE response
     try {

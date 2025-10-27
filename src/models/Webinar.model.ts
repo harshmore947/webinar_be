@@ -76,13 +76,30 @@ export interface IWebinar extends Document {
   moderators: mongoose.Types.ObjectId[]; // Refs to User
   resources: Array<{
     name: string;
+    description?: string;
     url: string;
-    type: "pdf" | "image";
+    type: "pdf" | "image" | "video";
     fileType: string; // MIME type
     size: number; // File size in bytes
+    category: "presentation" | "document" | "image" | "reference" | "handout" | "recording" | "other";
+    tags: string[];
+    accessLevel: "public" | "enrolled" | "paid";
+    uploadedBy: {
+      userId: mongoose.Types.ObjectId;
+      name: string;
+      role: string;
+    };
     uploadedAt: Date;
     publicId: string; // Cloudinary public ID for deletion
-  }>; // File resources with metadata
+    downloadCount: number;
+    isArchived: boolean;
+    metadata?: {
+      width?: number;
+      height?: number;
+      duration?: number; // for videos
+      pages?: number; // for PDFs
+    };
+  }>; // File resources with enhanced metadata
   enableQA: boolean;
   enablePolls: boolean;
   maxParticipants: string;

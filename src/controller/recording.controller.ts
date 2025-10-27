@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
 import Webinar from "../models/Webinar.model";
 import { v2 as cloudinary } from "cloudinary";
+import { isUserEnrolled } from "../utils/enrollment";
 
 // Upload webinar recording
 export const uploadRecording = async (req: AuthRequest, res: Response) => {
@@ -135,9 +136,8 @@ export const getRecording = async (req: AuthRequest, res: Response) => {
     }
 
     // Check access - enrolled users or host
-    const isEnrolled = webinar.enrolledUsers.some(
-      (id) => id.toString() === userId?.toString()
-    );
+    // Use the utility function that correctly handles the enrolledUsers structure
+    const isEnrolled = isUserEnrolled(webinar, userId || "");
     const isHost = webinar.hostId.toString() === userId?.toString();
 
     if (!isEnrolled && !isHost) {

@@ -48,6 +48,15 @@ import {
   getWebinarResources,
 } from "../controller/resourceUpload.controller";
 import {
+  uploadWebinarResourcesV2,
+  getWebinarResourcesV2,
+  updateWebinarResourceV2,
+  deleteWebinarResourceV2,
+  bulkResourceOperationsV2,
+  trackResourceDownloadV2,
+  getResourceStatsV2,
+} from "../controller/resourceUploadV2.controller";
+import {
   createPaymentSession,
   getPaymentStatus,
   verifyPaymentAndEnroll,
@@ -114,20 +123,65 @@ router.post("/:id/end", endWebinar);
 
 // Upload resources for a webinar
 router.post(
-  "/:webinarId/resources",
+  "/:id/resources",
   authenticateJWT,
   uploadMultipleResourceFiles,
   uploadWebinarResources
 );
 
 // Get resources for a webinar
-router.get("/:webinarId/resources", getWebinarResources);
+router.get("/:id/resources", getWebinarResources);
 
 // Delete a resource from a webinar
 router.delete(
-  "/:webinarId/resources/:resourceId",
+  "/:id/resources/:resourceId",
   authenticateJWT,
   deleteWebinarResource
+);
+
+// ================================
+// Resource Upload Routes V2 (Enhanced)
+// ================================
+
+// Upload resources with metadata (V2)
+router.post(
+  "/:id/resources/v2",
+  authenticateJWT,
+  uploadMultipleResourceFiles,
+  uploadWebinarResourcesV2
+);
+
+// Get resources with filters and stats (V2)
+router.get("/:id/resources/v2", getWebinarResourcesV2);
+
+// Get resource statistics (V2)
+router.get("/:id/resources/v2/stats", getResourceStatsV2);
+
+// Update resource metadata (V2)
+router.patch(
+  "/:id/resources/v2/:resourceId",
+  authenticateJWT,
+  updateWebinarResourceV2
+);
+
+// Delete a resource (V2)
+router.delete(
+  "/:id/resources/v2/:resourceId",
+  authenticateJWT,
+  deleteWebinarResourceV2
+);
+
+// Bulk operations (V2)
+router.post(
+  "/:id/resources/v2/bulk",
+  authenticateJWT,
+  bulkResourceOperationsV2
+);
+
+// Track download (V2)
+router.post(
+  "/:id/resources/v2/:resourceId/download",
+  trackResourceDownloadV2
 );
 
 // ================================

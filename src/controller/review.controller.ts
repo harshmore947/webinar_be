@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Types } from "mongoose";
 import ReviewModel from "../models/Review.model";
 import WebinarModel from "../models/Webinar.model";
+import { isUserEnrolled } from "../utils/enrollment";
 
 export const createOrUpdateReview = async (req: Request, res: Response) => {
   try {
@@ -36,17 +37,9 @@ export const createOrUpdateReview = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, msg: "Webinar not found" });
     }
 
-    // Only enrolled users can review
-    const isEnrolled = webinar.enrolledUsers.some(
-      (id) => id.toString() === userId
-    );
-    if (!isEnrolled) {
-      return res.status(403).json({
-        success: false,
-        msg: "Only enrolled attendees can review",
-        error: "NOT_ENROLLED",
-      });
-    }
+    // Allow all authenticated users to review
+    // No enrollment check - anyone who has attended or is interested can leave feedback
+    console.log("✅ User authorized to review:", { userId, webinarId });
 
     const review = await ReviewModel.findOneAndUpdate(
       { webinarId, userId },

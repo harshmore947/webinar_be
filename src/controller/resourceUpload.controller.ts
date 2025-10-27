@@ -17,7 +17,7 @@ import { getSocketInstance } from "../utils/socketService";
  */
 export const uploadWebinarResources = async (req: Request, res: Response) => {
   try {
-    const { webinarId } = req.params;
+    const { id: webinarId } = req.params;
     const userId = req.user?.id;
     const userRole = req.user?.role;
 
@@ -100,7 +100,7 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
 
     // Add successful uploads to webinar resources
     const newResources = successfulUploads.map((result) => result.data!);
-    webinar.resources.push(...newResources);
+    // webinar.resources.push(...newResources);
     await webinar.save();
 
     logInfo(
@@ -147,7 +147,7 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
  */
 export const deleteWebinarResource = async (req: Request, res: Response) => {
   try {
-    const { webinarId, resourceId } = req.params;
+    const { id: webinarId, resourceId } = req.params;
     const userId = req.user?.id;
     const userRole = req.user?.role;
 
@@ -256,7 +256,7 @@ export const deleteWebinarResource = async (req: Request, res: Response) => {
  */
 export const getWebinarResources = async (req: Request, res: Response) => {
   try {
-    const { webinarId } = req.params;
+    const { id: webinarId } = req.params;
 
     if (!Types.ObjectId.isValid(webinarId)) {
       return res.status(400).json({

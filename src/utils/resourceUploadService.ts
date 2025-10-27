@@ -109,7 +109,7 @@ export const uploadResourceFile = async (
  */
 export const deleteResourceFile = async (
   publicId: string,
-  resourceType: "raw" | "image" = "image"
+  resourceType: "raw" | "image" | "video" = "image"
 ): Promise<boolean> => {
   try {
     const result = await cloudinary.uploader.destroy(publicId, {

@@ -126,6 +126,40 @@ export const updateWebinarTemplate = async (req: Request, res: Response) => {
 
     webinar.certificateConfig = certificateConfig;
     webinar.hasCertification = hasCertification;
+
+    // Also update certificateTemplate for the new generation service
+    if (certificateConfig && hasCertification) {
+      // Convert certificateConfig fields to certificateTemplate fields format
+      const fields = certificateConfig.fields?.map((field: any) => ({
+        id: field.id,
+        key: field.key || field.value?.replace(/\{\{|\}\}/g, ''), // Use key if available, otherwise extract from mustache
+        label: field.label,
+        x: field.position?.x / 100 || 0, // Convert from percentage to 0-1 range
+        y: field.position?.y / 100 || 0,
+        fontFamily: field.fontFamily || 'Arial',
+        fontSize: field.fontSize || 16,
+        align: field.textAlign === 'center' ? 'center' : field.textAlign === 'right' ? 'right' : 'left',
+        color: field.fontColor || '#000000',
+        defaultText: field.value?.startsWith('{{') ? '' : field.value, // Empty for dynamic fields
+        format: field.type === 'date' ? 'MM/DD/YYYY' : undefined,
+      })) || [];
+
+      webinar.certificateTemplate = {
+        cloudinaryTemplateId: certificateConfig.backgroundImage ?
+          certificateConfig.backgroundImage.split('/').pop()?.split('.')[0] || `template_${webinarId}` :
+          `template_${webinarId}`,
+        cloudinaryUrl: certificateConfig.backgroundImage || '',
+        mimeType: 'image/png',
+        width: certificateConfig.dimensions?.width || 800,
+        height: certificateConfig.dimensions?.height || 600,
+        fields: fields,
+        lastEdited: new Date(),
+        version: (webinar.certificateTemplate as any)?.version ? (webinar.certificateTemplate as any).version + 1 : 1,
+      };
+    } else {
+      webinar.certificateTemplate = undefined;
+    }
+
     await webinar.save();
 
     res.status(200).json({
@@ -134,6 +168,7 @@ export const updateWebinarTemplate = async (req: Request, res: Response) => {
       data: {
         hasCertification: webinar.hasCertification,
         certificateConfig: webinar.certificateConfig,
+        certificateTemplate: webinar.certificateTemplate,
       },
     });
   } catch (error) {
