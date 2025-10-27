@@ -800,7 +800,7 @@ router.delete(
 // ================================
 // CERTIFICATE MANAGEMENT ROUTES
 // ================================
-import certificateRoutes from "./certificate.routes";
+import certificateRoutes from "./certificate.routes.new";
 router.use("/certificates", certificateRoutes);
 
 // Test routes for email functionality

@@ -225,12 +225,21 @@ export const generateCertificateForParticipant = async (req: Request, res: Respo
 /**
  * Generate certificates for all webinar attendees (bulk)
  * POST /api/certificates/generate/webinar/:webinarId
+ * POST /api/certificates/generate/bulk (with webinarId in body)
  */
 export const generateCertificatesForWebinar = async (req: Request, res: Response) => {
   try {
-    const { webinarId } = req.params;
+    // Support both params and body for webinarId
+    const webinarId = req.params.webinarId || req.body.webinarId;
     const { sendEmail, priority } = req.body;
     const userId = req.user?.id;
+
+    if (!webinarId) {
+      return res.status(400).json({
+        success: false,
+        message: "Webinar ID is required",
+      });
+    }
 
     const webinar = await WebinarModel.findById(webinarId);
     if (!webinar) {
@@ -372,6 +381,7 @@ export const downloadCertificate = async (req: Request, res: Response) => {
   try {
     const { certificateId } = req.params;
     const userId = req.user?.id;
+    const format = (req.query.format as string) || "pdf"; // Support both PDF and PNG
 
     const certificate = await CertificateService.getCertificate(certificateId);
 
@@ -392,6 +402,7 @@ export const downloadCertificate = async (req: Request, res: Response) => {
         certificateUrl: certificate.certificateUrl,
         certificateNumber: certificate.certificateNumber,
         downloadCount: (certificate.downloadCount || 0) + 1,
+        format: format,
       },
     });
   } catch (error) {
@@ -511,6 +522,181 @@ export const autoGenerateCertificates = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Direct PDF download for attendee (Fallback feature)
+ * POST /api/certificates/download-pdf/:webinarId
+ */
+export const downloadCertificatePDF = async (req: Request, res: Response) => {
+  try {
+    const { webinarId } = req.params;
+    const userId = req.user?.id;
+    const { format = "pdf", regenerate = false } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    // Check if user is enrolled/attended
+    const webinar = await WebinarModel.findById(webinarId)
+      .populate("hostId", "firstName lastName");
+
+    if (!webinar) {
+      return res.status(404).json({
+        success: false,
+        message: "Webinar not found",
+      });
+    }
+
+    // Find user's enrollment
+    const enrollment = webinar.enrolledUsers.find(
+      (e: any) => e.userId?.toString() === userId
+    );
+
+    if (!enrollment) {
+      return res.status(403).json({
+        success: false,
+        message: "You must be enrolled in this webinar to download certificate",
+      });
+    }
+
+    // Check if certificate already exists and is valid
+    if (!regenerate && enrollment.cert?.status === "done" && enrollment.cert.cloudinaryUrl) {
+      return res.status(200).json({
+        success: true,
+        message: "Certificate already exists",
+        data: {
+          certificateUrl: enrollment.cert.cloudinaryUrl,
+          certificateNumber: enrollment.cert.certificateNumber,
+          status: "completed",
+        },
+      });
+    }
+
+    // Generate certificate using the generation service
+    const { generateCertificateForUser } = await import("../services/certificateGeneration.service");
+    
+    const result = await generateCertificateForUser(webinarId, userId, {
+      startAsync: false, // Generate immediately for download
+      sendEmail: false,
+    });
+
+    if (result.status === "completed") {
+      // Fetch the generated certificate
+      const updatedWebinar = await WebinarModel.findById(webinarId);
+      const updatedEnrollment = updatedWebinar?.enrolledUsers.find(
+        (e: any) => e.userId?.toString() === userId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Certificate generated successfully",
+        data: {
+          certificateUrl: updatedEnrollment?.cert?.cloudinaryUrl,
+          certificateNumber: updatedEnrollment?.cert?.certificateNumber,
+          status: "completed",
+          format: format,
+        },
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: "Certificate generation failed",
+        error: (result as any).message || "Unknown error",
+      });
+    }
+  } catch (error) {
+    logError(`Error in downloadCertificatePDF: ${(error as Error).message}`);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate certificate for download",
+      error: (error as Error).message,
+    });
+  }
+};
+
+/**
+ * Retry failed certificate generation
+ * POST /api/certificates/retry/:webinarId
+ */
+export const retryCertificateGeneration = async (req: Request, res: Response) => {
+  try {
+    const { webinarId } = req.params;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    const webinar = await WebinarModel.findById(webinarId);
+    if (!webinar) {
+      return res.status(404).json({
+        success: false,
+        message: "Webinar not found",
+      });
+    }
+
+    // Find user's enrollment
+    const enrollment = webinar.enrolledUsers.find(
+      (e: any) => e.userId?.toString() === userId
+    );
+
+    if (!enrollment) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not enrolled in this webinar",
+      });
+    }
+
+    // Check if certificate failed
+    if (enrollment.cert?.status !== "failed") {
+      return res.status(400).json({
+        success: false,
+        message: "Certificate is not in failed state",
+        currentStatus: enrollment.cert?.status || "pending",
+      });
+    }
+
+    // Reset certificate status to pending
+    await WebinarModel.updateOne(
+      { _id: webinarId, "enrolledUsers.userId": userId },
+      {
+        $set: {
+          "enrolledUsers.$.cert.status": "pending",
+          "enrolledUsers.$.cert.attempts": 0,
+          "enrolledUsers.$.cert.lastError": null,
+        },
+      }
+    );
+
+    // Trigger generation
+    const { generateCertificateForUser } = await import("../services/certificateGeneration.service");
+    
+    const result = await generateCertificateForUser(webinarId, userId, {
+      startAsync: true,
+      sendEmail: true,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Certificate generation retry initiated",
+      data: result,
+    });
+  } catch (error) {
+    logError(`Error in retryCertificateGeneration: ${(error as Error).message}`);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retry certificate generation",
+      error: (error as Error).message,
+    });
+  }
+};
+
 export default {
   saveCertificateTemplate,
   getCertificateTemplates,
@@ -524,4 +710,6 @@ export default {
   getCertificateStatus,
   resendCertificateEmail,
   autoGenerateCertificates,
+  downloadCertificatePDF,
+  retryCertificateGeneration,
 };

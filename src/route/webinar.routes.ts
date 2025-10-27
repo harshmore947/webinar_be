@@ -171,15 +171,35 @@ router.get(
   getWebinarAnalytics
 );
 
-// Certification routes
+// ================================
+// Certification Routes
+// ================================
+// NOTE: Main certificate operations are in /api/certificates/*
+// These routes are convenience endpoints for webinar-specific certificate operations
+
+/**
+ * @route   POST /api/webinars/:id/enable-certification
+ * @desc    Enable certification for a webinar
+ * @access  Private (Host, Admin)
+ */
 router.post("/:id/enable-certification", authenticateJWT, enableCertification);
 
+/**
+ * @route   POST /api/webinars/:id/update-certificate-config
+ * @desc    Update certificate configuration (template, fields, etc.)
+ * @access  Private (Host, Admin)
+ */
 router.post(
   "/:id/update-certificate-config",
   authenticateJWT,
   updateCertificateConfig
 );
 
+/**
+ * @route   GET /api/webinars/:id/attendees
+ * @desc    Get all attendees of a webinar (for certificate generation)
+ * @access  Private (Host, Admin)
+ */
 router.get(
   "/:id/attendees",
   authenticateJWT,
@@ -187,6 +207,11 @@ router.get(
   getWebinarAttendees
 );
 
+/**
+ * @route   POST /api/webinars/:id/add-attendee
+ * @desc    Manually add an attendee to webinar
+ * @access  Private (Host, Admin)
+ */
 router.post(
   "/:id/add-attendee",
   authenticateJWT,
@@ -194,19 +219,35 @@ router.post(
   addAttendeeToWebinar
 );
 
+/**
+ * @route   POST /api/webinars/:id/generate-certificates
+ * @desc    Generate certificates for all eligible attendees (host-initiated)
+ * @access  Private (Host, Admin)
+ */
 router.post(
   "/:id/generate-certificates",
   authenticateJWT,
   generateCertificates
 );
 
+/**
+ * @route   POST /api/webinars/:id/request-certificate
+ * @desc    Request certificate generation for authenticated user
+ * @access  Private (User must be enrolled/attended)
+ * @note    This is the PRIMARY endpoint for users to request their certificate
+ */
 router.post(
   "/:id/request-certificate",
   authenticateJWT,
   requestUserCertificate
 );
 
-// Get user's certificate for this webinar
+/**
+ * @route   GET /api/webinars/:id/certificate
+ * @desc    Get user's certificate for this specific webinar
+ * @access  Private
+ * @note    Alias endpoint - also available at /api/certificates/webinar/:id/certificate
+ */
 router.get(
   "/:id/certificate",
   authenticateJWT,
