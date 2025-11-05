@@ -20,6 +20,8 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
     const { id: webinarId } = req.params;
     const userId = req.user?.id;
     const userRole = req.user?.role;
+    const userName =
+      (req.user as any)?.name || (req.user as any)?.email || "Unknown";
 
     if (!userId) {
       return res.status(401).json({
@@ -79,32 +81,53 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
     }));
 
     // Upload files to Cloudinary
-    const uploadResults = await uploadMultipleResources(
-      filesToUpload,
-      webinarId
-    );
+    const uploadResults = await uploadMultipleResources(filesToUpload, webinarId);
 
-    // Filter successful uploads
-    const successfulUploads = uploadResults.filter(
-      (result) => result.success && result.data
-    );
-    const failedUploads = uploadResults.filter((result) => !result.success);
+    const normalizedResources: Array<Record<string, unknown>> = [];
+    const failedUploads: string[] = [];
 
-    if (successfulUploads.length === 0) {
+    uploadResults.forEach((result, index) => {
+      const originalFile = filesToUpload[index];
+      if (result.success && result.data) {
+        const normalizedResource: Record<string, unknown> = {
+          ...result.data,
+          description: "",
+          category: "other",
+          tags: [] as string[],
+          accessLevel: "enrolled" as const,
+          uploadedBy: {
+            userId: new Types.ObjectId(userId),
+            name: userName,
+            role: userRole || "User",
+          },
+          downloadCount: 0,
+          isArchived: false,
+        };
+
+        if (result.data.metadata) {
+          normalizedResource.metadata = result.data.metadata;
+        }
+
+        normalizedResources.push(normalizedResource);
+      } else {
+        const errorMessage = result.error || "Unknown upload error";
+        failedUploads.push(`${originalFile.name}: ${errorMessage}`);
+      }
+    });
+
+    if (normalizedResources.length === 0) {
       return res.status(400).json({
         success: false,
         msg: "All file uploads failed",
-        errors: failedUploads.map((result) => result.error),
+        errors: failedUploads,
       });
     }
 
-    // Add successful uploads to webinar resources
-    const newResources = successfulUploads.map((result) => result.data!);
-    // webinar.resources.push(...newResources);
+    webinar.resources.push(...(normalizedResources as any));
     await webinar.save();
 
     logInfo(
-      `${successfulUploads.length} resources uploaded for webinar ${webinarId}`
+      `${normalizedResources.length} resources uploaded for webinar ${webinarId}`
     );
 
     // Emit socket event for real-time update
@@ -113,9 +136,10 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
       io.to(`webinar_${webinarId}`).emit("resource_uploaded", {
         success: true,
         webinarId,
-        resources: newResources,
+        resources: normalizedResources,
         uploadedBy: {
           userId,
+          name: userName,
           role: userRole,
         },
         timestamp: new Date().toISOString(),
@@ -125,12 +149,12 @@ export const uploadWebinarResources = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      msg: `${successfulUploads.length} resources uploaded successfully`,
+      msg: `${normalizedResources.length} resources uploaded successfully`,
       data: {
-        uploaded: successfulUploads.length,
+        uploaded: normalizedResources.length,
         failed: failedUploads.length,
-        resources: newResources,
-        errors: failedUploads.map((result) => result.error),
+        resources: normalizedResources,
+        errors: failedUploads,
       },
     });
   } catch (error) {
@@ -206,7 +230,12 @@ export const deleteWebinarResource = async (req: Request, res: Response) => {
     const resource = webinar.resources[resourceIndex] as any;
 
     // Delete from Cloudinary
-    const resourceType = resource.type === "pdf" ? "raw" : "image";
+    const resourceType =
+      resource.type === "pdf"
+        ? "raw"
+        : resource.type === "video"
+        ? "video"
+        : "image";
     const deleted = await deleteResourceFile(resource.publicId, resourceType);
 
     if (!deleted) {

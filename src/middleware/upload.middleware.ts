@@ -5,26 +5,28 @@ import { Request } from "express";
 const storage = multer.memoryStorage();
 
 // File filter for allowed types
+const allowedResourceTypes = [
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/webm",
+];
+
 const fileFilter = (
   req: Request,
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ) => {
-  // Allowed MIME types
-  const allowedTypes = [
-    "application/pdf",
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/webp",
-  ];
-
-  if (allowedTypes.includes(file.mimetype)) {
+  if (allowedResourceTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
     cb(
       new Error(
-        "Invalid file type. Only PDF, JPEG, PNG, and WebP files are allowed."
+        "Invalid file type. Allowed types: PDF, JPEG, PNG, WebP, GIF, MP4, and WebM."
       )
     );
   }
@@ -35,7 +37,7 @@ export const uploadResources = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit
     files: 10, // Maximum 10 files at once
   },
 });

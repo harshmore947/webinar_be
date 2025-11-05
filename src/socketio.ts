@@ -8,6 +8,7 @@ import { VoteModel } from "./models/Vote.model";
 import { logInfo, logError } from "./utils/logger";
 import { setSocketInstance } from "./utils/socketService";
 import jwt from "jsonwebtoken";
+import type { Socket } from "socket.io";
 
 interface ChatUser {
   id: string;
@@ -58,77 +59,80 @@ export const initializeSocketIO = (server: HTTPServer) => {
   // Set the socket instance for notifications
   setSocketInstance(io);
 
+  const AUTH_COOKIE_NAME = "token";
+
+  const extractTokenFromSocket = (socket: Socket): string | undefined => {
+    const { auth, headers } = socket.handshake;
+
+    const headerToken = headers.authorization?.replace("Bearer ", "");
+    if (headerToken && headerToken !== "null" && headerToken !== "undefined") {
+      return headerToken;
+    }
+
+    const authToken =
+      typeof auth?.token === "string" ? auth.token : undefined;
+    if (authToken && authToken !== "null" && authToken !== "undefined") {
+      return authToken;
+    }
+
+    const cookieHeader = headers.cookie;
+    if (!cookieHeader) {
+      return undefined;
+    }
+
+    const tokenFromCookie = cookieHeader
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .find((cookie) => cookie.startsWith(`${AUTH_COOKIE_NAME}=`))
+      ?.split("=")[1];
+
+    if (!tokenFromCookie) {
+      return undefined;
+    }
+
+    try {
+      const decodedToken = decodeURIComponent(tokenFromCookie);
+      return decodedToken && decodedToken !== "null" && decodedToken !== "undefined"
+        ? decodedToken
+        : undefined;
+    } catch (error) {
+      logError(`Failed to decode auth cookie for socket ${socket.id}: ${(error as Error).message}`);
+      return undefined;
+    }
+  };
+
   // Middleware for authentication (optional)
   io.use(async (socket, next) => {
     try {
-      // Try to get token from multiple sources
-      const token =
-        socket.handshake.auth.token ||
-        socket.handshake.headers.authorization?.replace("Bearer ", "") ||
-        socket.handshake.headers.cookie
-          ?.split(";")
-          ?.find((c) => c.trim().startsWith("token="))
-          ?.split("=")[1];
+      const token = extractTokenFromSocket(socket);
 
-      console.log("🔐 Socket authentication debug:", {
-        hasToken: !!token,
-        tokenPreview: token ? token.substring(0, 20) + "..." : null,
-        hasAuth: !!socket.handshake.auth.token,
-        hasAuthHeader: !!socket.handshake.headers.authorization,
-        hasCookie: !!socket.handshake.headers.cookie,
-      });
-
-      if (token && token !== "null" && token !== "undefined") {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-        console.log("🔓 JWT decoded:", {
-          userId: decoded.id,
-          exp: decoded.exp,
-        });
-
-        const user = await UserModel.findById(decoded.id).select(
-          "firstName lastName email role"
-        );
-
-        console.log("👤 User from database:", {
-          found: !!user,
-          email: user?.email,
-          role: user?.role,
-          name: user ? `${user.firstName} ${user.lastName}` : null,
-        });
-
-        if (user) {
-          (socket as any).userId = user._id.toString();
-          (socket as any).user = {
-            id: user._id.toString(),
-            name: `${user.firstName} ${user.lastName}`.trim() || user.email,
-            email: user.email,
-            role: user.role,
-          };
-          console.log("✅ User attached to socket:", (socket as any).user);
-        }
-      } else {
-        console.log("❌ No valid token provided");
+      if (!token) {
+        return next();
       }
-      next();
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+
+      const user = await UserModel.findById(decoded.id).select(
+        "firstName lastName email role"
+      );
+
+      if (user) {
+        (socket as any).userId = user._id.toString();
+        (socket as any).user = {
+          id: user._id.toString(),
+          name: `${user.firstName} ${user.lastName}`.trim() || user.email,
+          email: user.email,
+          role: user.role,
+        };
+
+  logInfo(`Socket ${socket.id} authenticated`);
+      }
     } catch (error) {
-      console.error("❌ Authentication error:", error);
-      // Continue without authentication for anonymous users
+      logError(`Socket authentication failed for ${socket.id}: ${(error as Error).message}`);
+    } finally {
       next();
     }
   });
-
-  // Track active connections per webinar for optimization
-  const webinarConnections = new Map<string, Set<string>>();
-
-  // Cleanup function for disconnected sockets
-  const cleanupSocket = (socketId: string) => {
-    webinarConnections.forEach((connections, webinarId) => {
-      connections.delete(socketId);
-      if (connections.size === 0) {
-        webinarConnections.delete(webinarId);
-      }
-    });
-  };
 
   io.on("connection", (socket) => {
     logInfo(
@@ -142,19 +146,6 @@ export const initializeSocketIO = (server: HTTPServer) => {
         try {
           const { webinarId, displayName } = data;
           const authenticatedUser = (socket as any).user;
-
-          console.log("🔍 Join webinar debug:", {
-            webinarId,
-            displayName,
-            authenticatedUser: authenticatedUser
-              ? {
-                  id: authenticatedUser.id,
-                  name: authenticatedUser.name,
-                  email: authenticatedUser.email,
-                  role: authenticatedUser.role,
-                }
-              : null,
-          });
 
           // Validate webinar exists
           const webinar = await WebinarModel.findById(webinarId).populate(
@@ -511,15 +502,6 @@ export const initializeSocketIO = (server: HTTPServer) => {
 
           // Check if user has permission to create polls
           const isAdmin = authenticatedUser?.role === "Admin";
-          console.log(`🔐 Poll creation permission check:`, {
-            chatUser: chatUser.name,
-            isHost: chatUser.isHost,
-            isModerator: chatUser.isModerator,
-            isPresenter: chatUser.isPresenter,
-            isAdmin,
-            userRole: authenticatedUser?.role,
-          });
-
           if (
             !chatUser.isHost &&
             !chatUser.isModerator &&

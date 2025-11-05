@@ -14,11 +14,17 @@ export interface ResourceUploadResult {
   data?: {
     name: string;
     url: string;
-    type: "pdf" | "image";
+    type: "pdf" | "image" | "video";
     fileType: string;
     size: number;
     uploadedAt: Date;
     publicId: string;
+    metadata?: {
+      width?: number;
+      height?: number;
+      duration?: number;
+      pages?: number;
+    };
   };
   error?: string;
 }
@@ -41,35 +47,49 @@ export const uploadResourceFile = async (
       "image/jpg",
       "image/png",
       "image/webp",
+      "image/gif",
+      "video/mp4",
+      "video/webm",
     ];
 
     if (!allowedTypes.includes(fileType)) {
       return {
         success: false,
         error:
-          "Invalid file type. Only PDF, JPEG, PNG, and WebP files are allowed.",
+          "Invalid file type. Allowed: PDF, JPEG, PNG, WebP, GIF, MP4, and WebM.",
       };
     }
 
-    // Validate file size (max 10MB)
-    const maxSize = 10 * 1024 * 1024; // 10MB
+    // Validate file size (max 50MB)
+    const maxSize = 50 * 1024 * 1024; // 50MB
     if (fileSize > maxSize) {
       return {
         success: false,
-        error: "File size too large. Maximum size is 10MB.",
+        error: "File size too large. Maximum size is 50MB.",
       };
     }
 
     // Determine resource type and folder
     const isPdf = fileType === "application/pdf";
-    const resourceType = isPdf ? "raw" : "image";
-    const folder = `webinar-resources/${webinarId}/${isPdf ? "pdfs" : "images"}`;
+    const isVideo = fileType.startsWith("video/");
+    const resourceType: "raw" | "image" | "video" = isPdf
+      ? "raw"
+      : isVideo
+      ? "video"
+      : "image";
+    const folderSegment =
+      resourceType === "raw"
+        ? "pdfs"
+        : resourceType === "video"
+        ? "videos"
+        : "images";
+    const folder = `webinar-resources/${webinarId}/${folderSegment}`;
 
     // Upload options
     const uploadOptions = {
       folder,
       public_id: `${Date.now()}_${fileName.replace(/\.[^/.]+$/, "")}`, // Remove extension from public_id
-      resource_type: resourceType as "raw" | "image",
+      resource_type: resourceType,
       use_filename: true,
       unique_filename: true,
       overwrite: false,
@@ -83,16 +103,29 @@ export const uploadResourceFile = async (
 
     logInfo(`Resource uploaded to Cloudinary: ${result.secure_url}`);
 
+    const metadataPayload: NonNullable<ResourceUploadResult["data"]>["metadata"] = {
+      width: typeof result.width === "number" ? result.width : undefined,
+      height: typeof result.height === "number" ? result.height : undefined,
+      duration:
+        typeof result.duration === "number" ? result.duration : undefined,
+      pages: typeof result.pages === "number" ? result.pages : undefined,
+    };
+
+    const hasMetadata = Object.values(metadataPayload).some(
+      (value) => typeof value === "number"
+    );
+
     return {
       success: true,
       data: {
         name: fileName,
         url: result.secure_url,
-        type: isPdf ? "pdf" : "image",
+        type: isPdf ? "pdf" : isVideo ? "video" : "image",
         fileType,
         size: fileSize,
         uploadedAt: new Date(),
         publicId: result.public_id,
+        metadata: hasMetadata ? metadataPayload : undefined,
       },
     };
   } catch (error) {

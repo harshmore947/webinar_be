@@ -75,6 +75,7 @@ export interface IWebinar extends Document {
   presenters: mongoose.Types.ObjectId[]; // Refs to User
   moderators: mongoose.Types.ObjectId[]; // Refs to User
   resources: Array<{
+    _id?: mongoose.Types.ObjectId;
     name: string;
     description?: string;
     url: string;
@@ -343,12 +344,49 @@ const WebinarSchema = new Schema<IWebinar>(
     resources: [
       {
         name: { type: String, required: true },
+        description: { type: String, default: "" },
         url: { type: String, required: true },
-        type: { type: String, enum: ["pdf", "image"], required: true },
+        type: {
+          type: String,
+          enum: ["pdf", "image", "video"],
+          required: true,
+        },
         fileType: { type: String, required: true }, // MIME type
         size: { type: Number, required: true }, // File size in bytes
+        category: {
+          type: String,
+          enum: [
+            "presentation",
+            "document",
+            "image",
+            "reference",
+            "handout",
+            "recording",
+            "other",
+          ],
+          default: "other",
+        },
+        tags: { type: [String], default: [] },
+        accessLevel: {
+          type: String,
+          enum: ["public", "enrolled", "paid"],
+          default: "enrolled",
+        },
+        uploadedBy: {
+          userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+          name: { type: String, default: "" },
+          role: { type: String, default: "User" },
+        },
         uploadedAt: { type: Date, default: Date.now },
         publicId: { type: String, required: true }, // Cloudinary public ID
+        downloadCount: { type: Number, default: 0 },
+        isArchived: { type: Boolean, default: false },
+        metadata: {
+          width: { type: Number },
+          height: { type: Number },
+          duration: { type: Number },
+          pages: { type: Number },
+        },
       },
     ],
     enableQA: { type: Boolean, default: false },

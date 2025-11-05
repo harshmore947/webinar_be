@@ -8,6 +8,146 @@ import {
 import { logError, logInfo } from "../utils/logger";
 import { getSocketInstance } from "../utils/socketService";
 
+type AccessLevel = "public" | "enrolled" | "paid";
+type ParsedMetadata = {
+  category: string;
+  description: string;
+  tags: string[];
+  accessLevel: AccessLevel;
+};
+
+const parseTags = (value: unknown): string[] => {
+  if (!value) {
+    return [];
+  }
+
+  const flatten = (input: unknown): string[] => {
+    if (Array.isArray(input)) {
+      return input.flatMap((item) => flatten(item));
+    }
+
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return flatten(parsed);
+        }
+      } catch (error) {
+        // Ignore JSON parsing issues and fallback to comma split
+      }
+
+      return trimmed
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+    }
+
+    return [];
+  };
+
+  return Array.from(new Set(flatten(value)));
+};
+
+const normalizeAccessLevel = (value: unknown): AccessLevel => {
+  if (value === "public" || value === "paid" || value === "enrolled") {
+    return value;
+  }
+  return "enrolled";
+};
+
+const applyMetadataEntry = (
+  target: Record<string, unknown>,
+  entry: unknown
+) => {
+  if (!entry) {
+    return;
+  }
+
+  let value = entry;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        value = parsed;
+      } else {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    Object.assign(target, value);
+  }
+};
+
+const extractMetadataForFiles = (
+  body: Record<string, unknown>,
+  fileCount: number
+): ParsedMetadata[] => {
+  const metadataStore: Array<Record<string, unknown>> = Array.from(
+    { length: fileCount },
+    () => ({})
+  );
+
+  const rawMetadata = body.metadata;
+  if (rawMetadata !== undefined) {
+    if (Array.isArray(rawMetadata)) {
+      rawMetadata.forEach((entry, index) => {
+        if (index < fileCount) {
+          applyMetadataEntry(metadataStore[index], entry);
+        }
+      });
+    } else {
+      applyMetadataEntry(metadataStore[0], rawMetadata);
+    }
+  }
+
+  Object.entries(body).forEach(([key, value]) => {
+    const match = key.match(/^metadata\[(\d+)\](?:\[(.+?)\])?$/);
+    if (!match) {
+      return;
+    }
+
+    const index = Number(match[1]);
+    if (Number.isNaN(index) || index < 0 || index >= fileCount) {
+      return;
+    }
+
+    const field = match[2];
+    if (!field) {
+      applyMetadataEntry(metadataStore[index], value);
+      return;
+    }
+
+    metadataStore[index][field] = value;
+  });
+
+  return metadataStore.map((metadata) => {
+    const category =
+      typeof metadata.category === "string" && metadata.category.trim()
+        ? metadata.category
+        : "other";
+    const description =
+      typeof metadata.description === "string" ? metadata.description : "";
+    const tags = parseTags(metadata.tags);
+    const accessLevel = normalizeAccessLevel(metadata.accessLevel);
+
+    return {
+      category,
+      description,
+      tags,
+      accessLevel,
+    };
+  });
+};
+
 /**
  * Upload resources for a webinar with enhanced metadata (V2)
  */
@@ -67,70 +207,85 @@ export const uploadWebinarResourcesV2 = async (req: Request, res: Response) => {
       });
     }
 
-    // Parse metadata from request body
-    const metadataArray = req.body.metadata 
-      ? (Array.isArray(req.body.metadata) ? req.body.metadata : [req.body.metadata])
-      : [];
+    const metadataArray = extractMetadataForFiles(
+      req.body as Record<string, unknown>,
+      files.length
+    );
 
     // Prepare files for upload
     const filesToUpload = files.map((file, index) => {
-      const metadata = metadataArray[index] 
-        ? (typeof metadataArray[index] === 'string' ? JSON.parse(metadataArray[index]) : metadataArray[index])
-        : {};
+      const metadata = metadataArray[index] || {
+        category: "other",
+        description: "",
+        tags: [],
+        accessLevel: "enrolled" as AccessLevel,
+      };
 
       return {
         buffer: file.buffer,
         name: file.originalname,
         type: file.mimetype,
         size: file.size,
-        category: metadata.category || "other",
-        description: metadata.description || "",
-        tags: metadata.tags || [],
-        accessLevel: metadata.accessLevel || "enrolled",
+        category: metadata.category,
+        description: metadata.description,
+        tags: metadata.tags,
+        accessLevel: metadata.accessLevel,
       };
     });
 
     // Upload files to Cloudinary
     const uploadResults = await uploadMultipleResources(
-      filesToUpload.map(f => ({
-        buffer: f.buffer,
-        name: f.name,
-        type: f.type,
-        size: f.size,
+      filesToUpload.map((file) => ({
+        buffer: file.buffer,
+        name: file.name,
+        type: file.type,
+        size: file.size,
       })),
       webinarId
     );
 
-    // Filter successful uploads and add metadata
-    const successfulUploads = uploadResults
-      .filter((result) => result.success && result.data)
-      .map((result, index) => ({
-        ...result.data!,
-        description: filesToUpload[index].description,
-        category: filesToUpload[index].category,
-        tags: filesToUpload[index].tags,
-        accessLevel: filesToUpload[index].accessLevel,
-        uploadedBy: {
-          userId: new Types.ObjectId(userId),
-          name: userName,
-          role: userRole || "User",
-        },
-        downloadCount: 0,
-        isArchived: false,
-      }));
+    const successfulUploads: Array<Record<string, unknown>> = [];
+    const failedUploads: string[] = [];
 
-    const failedUploads = uploadResults.filter((result) => !result.success);
+    uploadResults.forEach((result, index) => {
+      const originalFile = filesToUpload[index];
+      if (result.success && result.data) {
+        const normalizedResource: Record<string, unknown> = {
+          ...result.data,
+          description: originalFile.description,
+          category: originalFile.category,
+          tags: originalFile.tags,
+          accessLevel: originalFile.accessLevel,
+          uploadedBy: {
+            userId: new Types.ObjectId(userId),
+            name: userName,
+            role: userRole || "User",
+          },
+          downloadCount: 0,
+          isArchived: false,
+        };
+
+        if (result.data.metadata) {
+          normalizedResource.metadata = result.data.metadata;
+        }
+
+        successfulUploads.push(normalizedResource);
+      } else {
+        const errorMessage = result.error || "Unknown upload error";
+        failedUploads.push(`${originalFile.name}: ${errorMessage}`);
+      }
+    });
 
     if (successfulUploads.length === 0) {
       return res.status(400).json({
         success: false,
         msg: "All file uploads failed",
-        errors: failedUploads.map((result) => result.error),
+        errors: failedUploads,
       });
     }
 
     // Add successful uploads to webinar resources
-    webinar.resources.push(...successfulUploads as any);
+    webinar.resources.push(...(successfulUploads as any));
     await webinar.save();
 
     logInfo(
@@ -161,7 +316,7 @@ export const uploadWebinarResourcesV2 = async (req: Request, res: Response) => {
         uploaded: successfulUploads.length,
         failed: failedUploads.length,
         resources: successfulUploads,
-        errors: failedUploads.map((result) => result.error),
+        errors: failedUploads,
       },
     });
   } catch (error) {
